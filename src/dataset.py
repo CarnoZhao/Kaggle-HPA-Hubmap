@@ -15,6 +15,7 @@ def get_data(cfg):
     stratified_by = cfg.get("stratified_by", None) 
     group_by = cfg.get("group_by", None)
     dataset_cfg = cfg.get("dataset", {})
+    num_workers = cfg.get("num_workers", 8)
     
     if data_type is not None:
         DataClass = eval(data_type)
@@ -58,7 +59,7 @@ def get_data(cfg):
 
     sampler = torchsampler.ImbalancedDatasetSampler(ds_train) if ds_train.balance_key else None
 
-    def dl_train(shuffle = True, drop_last = True, num_workers = 8, sampler = sampler):
+    def dl_train(shuffle = True, drop_last = True, num_workers = num_workers, sampler = sampler):
         sampler = {"sampler": sampler} if sampler else {"shuffle": shuffle}
         return DataLoader(ds_train, 
                         batch_size, 
@@ -67,7 +68,7 @@ def get_data(cfg):
 		                worker_init_fn = lambda id: np.random.seed(torch.initial_seed() // 2 ** 32 + id), 
                         **sampler)
 
-    def dl_valid(shuffle = False, num_workers = 8):
+    def dl_valid(shuffle = False, num_workers = num_workers):
         return DataLoader(ds_valid, batch_size, shuffle = shuffle, num_workers = num_workers)
 
     return (ds_train, ds_valid), (dl_train, dl_valid)
