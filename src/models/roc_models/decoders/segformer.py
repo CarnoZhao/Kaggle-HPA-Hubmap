@@ -1,6 +1,6 @@
 ### inference https://github.com/FrancescoSaverioZuppichini/SegFormer/blob/main/README.ipynb
 import torch
-# from einops import rearrange
+from einops import rearrange
 from torch import nn
 import torch.nn.functional as F
 

@@ -1,56 +1,25 @@
 global:
-  name: &name fups_pv2d
+  name: &name fups_b4_stain
   fold: &fold 4
   version: &version f4
 
-norm_cfg: &norm_cfg {type: BN, requires_grad: True}
 model:
-  type: MMSegModel
-  backbone:
-    type: mmseg.PyramidVisionTransformerV2
-    model_name: b2
-    pretrained: ./weights/pvt_v2_b2.pth
-  decode_head:
-    type: DAFormerHead
-    channels: 256
-    dropout_ratio: 0.1
-    num_classes: 1
-    norm_cfg: *norm_cfg
-    align_corners: False
-    decoder_params:
-      embed_dims: 256
-      embed_cfg: {type: mlp, act_cfg: null, norm_cfg: null}
-      embed_neck_cfg: {type: mlp, act_cfg: null, norm_cfg: null}
-      fusion_cfg: 
-        type: conv
-        kernel_size: 3
-        act_cfg: {type: ReLU}
-        norm_cfg: *norm_cfg
-  # aux_head:
-  #   type: FCNHead
-  #   in_index: 2
-  #   channels: 256
-  #   num_convs: 1
-  #   concat_inputs: False
-  #   dropout_ratio: 0.1
-  #   num_classes: 1
-  #   norm_cfg: *norm_cfg
-  #   align_corners: False
+  type: SMPModel
+  model_type: Unet
+  model_name: timm-efficientnet-b4
+  pretrained_weight: noisy-student
+  num_classes: 1
 
-loss: {
-  losses: [{
-      type: BCEWithIgnoreLoss, 
-      loss_name: bce_loss, 
-      ignore_index: 255, 
-      loss_weight: 1.0,
-    }, {
-      type: DiceLoss, 
-      loss_name: dice_loss, 
-      loss_weight: 1.0, 
-    }],
-  # multi_inputs: True,
-  # input_weights: [1, 1]
-}
+loss: [{
+  type: BCEWithIgnoreLoss, 
+  loss_name: bce_loss, 
+  ignore_index: 255, 
+  loss_weight: 1.0,
+}, {
+  type: DiceLoss, 
+  loss_name: dice_loss, 
+  loss_weight: 1.0, 
+}]
 
 metric: 
   type: DiceMetric
@@ -93,6 +62,7 @@ data:
           {type: ColorJitter, p: 0.5, contrast: 0.4, saturation: 0.0, hue: 0.0, brightness: 0.0},
           {type: GaussNoise, p: 0.5},
         ], p: 1.0, n: 2, replace: False},
+        {type: StainTools, p: 0.5},
         {type: Normalize},
         {type: ToTensorV2},
       ],

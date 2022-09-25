@@ -1,5 +1,5 @@
 global:
-  name: &name raw_b4_stain_1024
+  name: &name nmpsst_b4_load
   fold: &fold 4
   version: &version f4
 
@@ -8,12 +8,19 @@ model:
   model_type: Unet
   model_name: timm-efficientnet-b4
   pretrained_weight: noisy-student
+  load_from: logs/fups_b4_stain/f4/epoch*.ckpt
   num_classes: 1
 
-loss: [
-  {type: BCEWithIgnoreLoss, loss_name: bce_loss, ignore_index: 255, loss_weight: 1.0},
-  {type: DiceLoss, loss_name: dice_loss, loss_weight: 1.0},
-]
+loss: [{
+  type: BCEWithIgnoreLoss, 
+  loss_name: bce_loss, 
+  ignore_index: 255, 
+  loss_weight: 1.0,
+}, {
+  type: DiceLoss, 
+  loss_name: dice_loss, 
+  loss_weight: 1.0, 
+}]
 
 metric: 
   type: DiceMetric
@@ -23,12 +30,22 @@ data:
   type: RawData
   fold: *fold
   num_folds: 5
-  batch_size: 8
+  batch_size: 16
   stratified_by: null
   group_by: null
   dataset:
-    image_size: &image_size 1024
-    resize: &resize 1024
+    image_size: &image_size 768
+    resize: &resize 768
+    data_dir: [./data/train, ./data/he_unlabeled]
+    drop_organs: [lung]
+    # balance_key: organ
+    resample_query: {
+      train: [
+        {query: data_dir == "./data/he_unlabeled" & organ == "kidney", ratio: 0.1},
+        {query: data_dir == "./data/he_unlabeled" & organ == "prostate", ratio: 0.1},
+        {query: data_dir == "./data/he_unlabeled" & organ == "spleen", ratio: 0.1},
+      ]
+    }
     trans: {
       train: [
         {type: Resize, height: *resize, width: *resize},
@@ -46,7 +63,7 @@ data:
           {type: ColorJitter, p: 0.5, contrast: 0.4, saturation: 0.0, hue: 0.0, brightness: 0.0},
           {type: GaussNoise, p: 0.5},
         ], p: 1.0, n: 2, replace: False},
-        {type: StainTools, p: 0.5},
+        {type: StainNormAug, aug: 0.9, p: 0.5},
         {type: Normalize},
         {type: ToTensorV2},
       ],
@@ -60,19 +77,20 @@ data:
 train:
   # optimizer
   optimizer: adam
-  learning_rate: 1e-3
+  learning_rate: 1e-4
   weight_decay: 2e-5
 
   # scheduler
-  num_epochs: 100
+  num_epochs: 20
   scheduler: one_cycle
 
   # trainer
   monitor: val_dice
   log_step: 50
-  val_interval: 5
-  swa: True
+  val_interval: 1
+  swa: False
   grad_clip: 2.0
+  strategy: dp
 
 name: *name
 version: *version

@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 import gc
 import sys
@@ -15,7 +15,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from omegaconf import OmegaConf
-import segmentation_models_pytorch as smp
+
+from src.models import MMSegModel, Segformer, SMPModel, Net, SMPUNet
+
 
 def rle_decode(mask_rle, shape):
     s = np.array(mask_rle.split(), dtype=int)
@@ -33,44 +35,30 @@ def rle_encode(img):
     runs = np.where(pixels[1:] != pixels[:-1])[0] + 1
     runs[1::2] -= runs[::2]
     return ' '.join(str(x) for x in runs)
-
-class SMPModel(nn.Module):
-    def __init__(self, 
-                model_type = "Unet", 
-                model_name = "resnet18",
-                pretrained_weight = "imagenet",
-                num_classes = 1,
-                **kwargs
-                ):
-        super().__init__()
-        self.model = getattr(smp, model_type)(model_name, encoder_weights = pretrained_weight, classes = num_classes)
-        
-    def forward(self, x):
-        return self.model(x)
     
 def get_model(cfg):
     cfg = cfg.copy()
     model = eval(cfg.pop("type"))(**cfg)
-    
-    if "load_from" in cfg and cfg.load_from is not None:
-        stt = torch.load(cfg.load_from, map_location = "cpu")
-        stt = stt["state_dict"] if "state_dict" in stt else stt
-        model.load_state_dict(stt, strict = False)
     return model
 
-def load_resize(sub, idx):
-    file_name = sub.loc[idx, "file_name"]
+def load(row):
+    file_name = row.file_name
     img = cv2.imread(file_name)
-    mask = rle_decode(sub.loc[idx, "rle"], img.shape[:2]).T
+    mask = rle_decode(row.rle, img.shape[:2]).T
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    
-    resize_ratio = 1.6 / sub.loc[idx, "pixel_size"] / base_ratio
+    return img, mask
+
+def resize(row, img, base_ratio, force_resize):
+    resize_ratio = base_ratio / row.pixel_size
     old_size = img.shape[:2]
     new_size = (int(round(img.shape[0] / resize_ratio)), int(round(img.shape[1] / resize_ratio)))
     img = cv2.resize(img, new_size[::-1])
-    return img, mask, old_size, new_size
+    if force_resize:
+        img = cv2.resize(img, force_resize[::-1])
+        new_size = force_resize
+    return img, old_size, new_size
 
-def cut_pad_norm(img):
+def cut_pad_norm(img, crop_size, stride):
     pad_size = []
     cut_point = []
     for i in range(2):
@@ -84,11 +72,12 @@ def cut_pad_norm(img):
     pad_img = ((pad_img / 255. - mean) / std).astype(np.float32)
     return pad_img, pad_size, cut_point
 
-def predict(models, cut):
+def predict(row, models, cut):
     cut = torch.tensor(cut.transpose(2, 0, 1)).unsqueeze(0).cuda()
     with torch.no_grad():
         preds = []; sum_weight = 0
-        for model, weight, tta in models:
+        for model, weight, tta, exclude_func in models:
+            if exclude_func is not None and exclude_func(row): continue
             pred = model(cut).sigmoid()
             for dim in tta:
                 pred += torch.flip(model(torch.flip(cut, dim)), dim).sigmoid()
@@ -97,15 +86,14 @@ def predict(models, cut):
         pred = sum(preds) / sum_weight
     return pred
 
-def sliding_window_inference(models, pad_img, pad_size, cut_point, old_size, organ_id = -1):
+def sliding_window_inference(row, models, pad_img, pad_size, cut_point, old_size, crop_size):
     base = np.zeros(pad_img.shape[:2], dtype = np.float32)
     sliding_cnt = np.zeros(pad_img.shape[:2], dtype = int)
     for i, x in enumerate(cut_point[0]):
         for j, y in enumerate(cut_point[1]):
             cut = pad_img[x:x + crop_size[0], y:y + crop_size[1]]
             
-            pred = predict(models, cut)
-            if organ_id != -1: pred = pred[organ_id]
+            pred = predict(row, models, cut)
             
             base[x:x + crop_size[0], y:y + crop_size[1]] += pred
             sliding_cnt[x:x + crop_size[0], y:y + crop_size[1]] += 1 # kernel
@@ -116,9 +104,9 @@ def sliding_window_inference(models, pad_img, pad_size, cut_point, old_size, org
 
 
 
-def iter_folds():
+def iter_folds(names, folds = range(5)):
     D = []
-    for fold in range(5):
+    for fold in folds:
         data_dir = "./data"
         sub = pd.read_csv(os.path.join(data_dir, "train.csv"))
         test_images = glob.glob(os.path.join(data_dir, "train/images", "*.*"), recursive = True)
@@ -134,58 +122,106 @@ def iter_folds():
         model_infos = [
             dict(
                 ckpt = f"./logs/{name}/f{fold}/{last_or_best}.ckpt",
-                weight = 1.0,
-                tta = [[2], [3], [2, 3]]
-            )
+                weight = weight,
+                tta = tta,
+                exclude_func = exclude_func
+            ) for name, weight, exclude_func in names
         ]
 
         models = []
         for model_info in model_infos:
             if not os.path.exists(model_info["ckpt"]):
-                model_info['ckpt'] = glob.glob(model_info['ckpt'])[0]
+                model_info['ckpt'] = sorted(glob.glob(model_info['ckpt']))[-1]
             stt = torch.load(model_info["ckpt"], map_location = "cpu")
-            cfg = OmegaConf.create(eval(str(stt["hyper_parameters"]))).model
-            cfg.pretrained_weight = None
-            stt = {k[6:]: v for k, v in stt["state_dict"].items()}
+            if "hyper_parameters" not in stt:
+                cfg = OmegaConf.load(os.path.join(os.path.dirname(model_info["ckpt"]), "hparams.yaml"))
+            else:
+                cfg = OmegaConf.create(eval(str(stt["hyper_parameters"])))
+            cfg = cfg.model
+            if cfg.type == "Segformer":
+                cfg.pretrained = True
+            elif cfg.type == "MMSegModel":
+                if cfg.backbone.type == "mmseg.PVT_b2":
+                    cfg.backbone.model_name = "b2"
+                    cfg.backbone.type = "mmseg.PyramidVisionTransformerV2"
+                cfg.backbone.pretrained = None
+            elif cfg.type == "SMPModel":
+                cfg.pretrained_weight = None
+            if all([k.startswith("model") for k in stt["state_dict"]]):
+                stt = {k[6:]: v for k, v in stt["state_dict"].items()}
+            elif all([k.startswith("net") for k in stt["state_dict"]]):
+                stt = {k[4:]: v for k, v in stt["state_dict"].items()}
+            else:
+                stt = stt["state_dict"]
             
             model = get_model(cfg)
-            model.load_state_dict(stt)
+            model.load_state_dict(stt, strict = True)
             model.eval()
             model.cuda()
-            models.append([model, model_info["weight"], model_info["tta"]])
+            models.append([model, 
+                           model_info["weight"], 
+                           model_info["tta"],
+                           model_info["exclude_func"]])
 
 
         dices = []
         for idx in tqdm(range(len(sub))):
-            organ = sub.loc[idx, "organ"]
-            img, mask, old_size, new_size = load_resize(sub, idx)
-            
-            pad_img, pad_size, cut_point = cut_pad_norm(img)
-            
-            if organ in organ_id:
-                pred = sliding_window_inference(models, pad_img, pad_size, cut_point, old_size, organ_id[organ])
-                pred = (pred > thres.get(organ, 0.5)).astype(np.uint8)
-            else:
-                pred = np.ones(old_size, dtype = np.uint8)
+            row = sub.loc[idx]
+            img, mask = load(row)
+            pred = 0
+            for force_resize in force_resizes:
+                resized_img, old_size, new_size = resize(row, img, base_ratio, force_resize)
+                
+                pad_img, pad_size, cut_point = cut_pad_norm(resized_img, crop_size, stride)
+                
+                pred += sliding_window_inference(row, models, pad_img, pad_size, cut_point, old_size, crop_size)
+            pred /= len(force_resizes)
+            pred = (pred > thres.get(row.organ, base_thres)).astype(np.uint8)
             
             I = ((pred == 1) & (mask == 1)).sum()
             C = (pred == 1).sum() + (mask == 1).sum()
-            dices.append([2 * I / C, organ])
+            dices.append([2 * I / C, row.organ])
         dices = pd.DataFrame(dices, columns = ["dice", "organ"])
         D.append(dices.groupby("organ").agg("mean").T)
     return D
 
-base_ratio = 1.0
-crop_size = tuple([int(round(_ * base_ratio)) for _ in (512, 512)])
-stride = tuple([int(round(_ * base_ratio)) for _ in (256, 256)])
+fold_sizes = np.array([[20, 12, 9, 19, 11],
+                    [20, 11, 10, 19, 10],
+                    [20, 11, 10, 19, 10],
+                    [19, 12, 10, 18, 11],
+                    [20, 12, 9, 18, 11]])
+crop_size = 1536
+base_ratio = 3000 / crop_size * 0.4
+stride = (crop_size // 2, crop_size // 2)
+force_resizes = [(crop_size, crop_size)]
+crop_size = (crop_size, crop_size)
 mean = np.array([0.485, 0.456, 0.406])
 std = np.array([0.229, 0.224, 0.225])
-thres = {}
+tta = [[2], [3], [2,3]]
+thres = {"lung": 0.2, "spleen": 0.5}
+base_thres = 0.5
 organs = ["prostate", "spleen", "largeintestine", "kidney", "lung"]
 organ_id = {o: -1 for i, o in enumerate(organs)}
+last_or_best = ["epoch*", "last"][0]
 
-name = "base_b2"
-last_or_best = "last" # ["epoch*", "last"]
-D = iter_folds()
-d = pd.concat(D).reset_index(drop = True)
-d
+names_list = [
+    [
+        # ("raw_coatsm", 1.0, None),
+        # ("raw_mmsgf2", 1.0, None)
+        ("roc_logs/sgf2_768_v1", 1.0, None),
+        # ("raw_pv2d_stain", 1.0, None),
+        # ("raw_b7_stain_v2", 1.0, None),
+        # ("raw_pvt2daf_noLU", 1.0, lambda row: row.organ == "lung"),
+        # ("fups_b4", 1.0, lambda row: row.organ == "lung"),
+        # ("raw_b4", 1.0, lambda row: row.organ != "lung"),
+    ],
+]
+for names in names_list:
+    print([_[0] for _ in names])
+    D = iter_folds(names)
+    d = pd.concat(D).reset_index(drop = True)
+    d["avg"] = (d * fold_sizes).sum(1) / fold_sizes.sum(1)
+    d["avgLU"] = (d.iloc[:,:5] * fold_sizes).iloc[:,[0,1,3,4]].sum(1) / fold_sizes[:,[0,1,3,4]].sum(1)
+
+    # print(d)
+    print(",".join(d.mean(0).round(3).apply(str)))

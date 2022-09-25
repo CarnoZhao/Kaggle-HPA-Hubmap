@@ -1,0 +1,49 @@
+model:
+  type: SMPUNet
+  CFG:
+    data_dir: '/kaggle/input/hubmap-organ-segmentation'
+    n_fold: 5
+    train_csv_path: data_dir + '/train.csv'
+    sample_csv_path: data_dir + '/sample_submission.csv'
+    test_images_dir: data_dir + '/test_images/'
+
+    encoder_name: 'tu-tf_efficientnet_b7_ns'
+    decoder_name: 'smp_unet'
+    
+    widths: [64, 128, 320, 512]
+    scale_factors: [8, 4, 2, 1]
+    decoder_dim: 320
+    dropout: 0.1
+    aux: True
+    fuse: 'conv1x1'
+    
+    data_type: 'HuBMAP' ## HPA or HuBMAP
+    stain_norm: False
+    stain_aug: False
+  
+    encoder_depth: 5 # 5
+    decoder_channels: [256, 128, 64, 32, 16] #[256, 128, 64, 32, 16]
+        
+    decoder_attention_type: null
+    activation: null
+    aux_params: null
+    resume: False
+    attention: False
+    
+    load_weights: False
+
+    n_channels: 3
+    image_size: [1536,1536]
+    batch_size: 4       ### total batch size
+    num_classes: 1
+    
+    device: 'cuda'             ### set gpu or cpu mode
+    debug: False              ### debug flag for checking your modify code
+    num_workers: 4            ### number workers
+
+    seed: 2022
+    ### valid params
+    tta: 4
+    mask_threshold: 0.5
+    small_mask_threshold: 0
+    pad_size: 256

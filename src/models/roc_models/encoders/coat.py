@@ -919,7 +919,7 @@ class coat_lite_medium (CoaT):
             **kwargs)
 
 #modified
-class coat_parallel_small_plus1 (CoaTPlus):
+class coat_parallel_small_plus1(CoaTPlus):
     def __init__(self, **kwargs):
         super(coat_parallel_small_plus1, self).__init__(
             patch_size=4,
@@ -930,6 +930,18 @@ class coat_parallel_small_plus1 (CoaTPlus):
             mlp_ratios=[4, 4, 4, 4, 4],
             pretrain ='coat_small_7479cf9b.pth',
             **kwargs)
+
+# class coat_parallel_small_plus1(CoaTPlus):
+#     def __init__(self, **kwargs):
+#         super(coat_parallel_small_plus1, self).__init__(
+#             patch_size=4,
+#             embed_dims=[64, 128, 320, 512, 768],
+#             serial_depths=[3, 4, 6, 3, 3],
+#             parallel_depth=6,
+#             num_heads=8,
+#             mlp_ratios=[4, 4, 4, 4, 4],
+#             pretrain ='coat_small_7479cf9b.pth',
+#             **kwargs)
 
 
 if 0:

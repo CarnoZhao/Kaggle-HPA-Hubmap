@@ -1,0 +1,42 @@
+model:
+  type: Net
+  CFG:
+    data_dir: '/kaggle/input/hubmap-organ-segmentation'
+    n_fold: 5
+    train_csv_path: data_dir + '/train.csv'
+    sample_csv_path: data_dir + '/sample_submission.csv'
+    test_images_dir: data_dir + '/test_images/'
+
+    encoder_name: 'hybrid_cnn_pvt_v2_b4_5level'
+    decoder_name: 'unetdecoder'
+    
+    widths: [64, 128, 320, 512]
+    scale_factors: [8, 4, 2, 1]
+    decoder_dim: 320
+    dropout: 0.1
+    aux: True
+    fuse: 'conv3x3'
+    
+    encoder_depth: 6
+    decoder_channels: [320, 256, 128, 64, 32, 16]
+    
+    decoder_attention_type: null
+    activation: null
+    
+    data_type: 'HPA' ## HPA or HuBMAP
+    load_weights: False
+    n_channels: 3
+    image_size: [1024,1024]
+    num_classes: 1
+
+
+    device: 'cuda'             ### set gpu or cpu mode
+    debug: False              ### debug flag for checking your modify code
+    num_workers: 4            ### number workers
+
+    seed: 2022
+    ### valid params
+    tta: 4
+    mask_threshold: 0.5
+    small_mask_threshold: 0
+    pad_size: 256

@@ -216,213 +216,353 @@ class OverlapPatchEmbed(nn.Module):
 
 
 class PyramidVisionTransformerV2(nn.Module):
-	def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dims=[64, 128, 256, 512],
-	             num_heads=[1, 2, 4, 8], mlp_ratios=[4, 4, 4, 4], qkv_bias=False, qk_scale=None, drop_rate=0.,
-	             attn_drop_rate=0., drop_path_rate=0., norm_layer=nn.LayerNorm,
-	             depths=[3, 4, 6, 3], sr_ratios=[8, 4, 2, 1], num_stages=4,
-	             linear=False,
-	             pretrain=None
-	             ):
-		super().__init__()
-		self.pretrain = pretrain
-		self.embed_dims = embed_dims
-		
-		self.num_classes = num_classes
-		self.depths = depths
-		self.num_stages = num_stages
-		
-		dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]  # stochastic depth decay rule
-		cur = 0
-		
-		for i in range(num_stages):
-			patch_embed = OverlapPatchEmbed(img_size=img_size if i == 0 else img_size // (2 ** (i + 1)),
-			                                patch_size=7 if i == 0 else 3,
-			                                stride=4 if i == 0 else 2,
-			                                in_chans=in_chans if i == 0 else embed_dims[i - 1],
-			                                embed_dim=embed_dims[i])
-			
-			block = nn.ModuleList([Block(
-				dim=embed_dims[i], num_heads=num_heads[i], mlp_ratio=mlp_ratios[i], qkv_bias=qkv_bias, qk_scale=qk_scale,
-				drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[cur + j], norm_layer=norm_layer,
-				sr_ratio=sr_ratios[i], linear=linear)
-				for j in range(depths[i])])
-			norm = norm_layer(embed_dims[i])
-			cur += depths[i]
-			
-			setattr(self, f"patch_embed{i + 1}", patch_embed)
-			setattr(self, f"block{i + 1}", block)
-			setattr(self, f"norm{i + 1}", norm)
-		
-		# classification head
-		self.head = nn.Linear(embed_dims[3], num_classes) if num_classes > 0 else nn.Identity()
-		
-		self.apply(self._init_weights)
-	
-	def _init_weights(self, m):
-		if isinstance(m, nn.Linear):
-			trunc_normal_(m.weight, std=.02)
-			if isinstance(m, nn.Linear) and m.bias is not None:
-				nn.init.constant_(m.bias, 0)
-		elif isinstance(m, nn.LayerNorm):
-			nn.init.constant_(m.bias, 0)
-			nn.init.constant_(m.weight, 1.0)
-		elif isinstance(m, nn.Conv2d):
-			fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-			fan_out //= m.groups
-			m.weight.data.normal_(0, math.sqrt(2.0 / fan_out))
-			if m.bias is not None:
-				m.bias.data.zero_()
-	
-	def freeze_patch_emb(self):
-		self.patch_embed1.requires_grad = False
-	
-	@torch.jit.ignore
-	def no_weight_decay(self):
-		return {'pos_embed1', 'pos_embed2', 'pos_embed3', 'pos_embed4', 'cls_token'}  # has pos_embed may be better
-	
-	def get_classifier(self):
-		return self.head
-	
-	def reset_classifier(self, num_classes, global_pool=''):
-		self.num_classes = num_classes
-		self.head = nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
-	
-	#https://github.com/whai362/PVT/blob/v2/segmentation/pvt.py
-	def forward(self, x):
-		outs = []
-		B = x.shape[0]
-		
-		for i in range(self.num_stages):
-			patch_embed = getattr(self, f"patch_embed{i + 1}")
-			block = getattr(self, f"block{i + 1}")
-			norm = getattr(self, f"norm{i + 1}")
-			x, H, W = patch_embed(x)
-			for blk in block:
-				x = blk(x, H, W)
-			x = norm(x)
-			#if i != self.num_stages - 1:
-			#	x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
-			x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
-			outs.append(x)
-			
-		return outs
- 
+    def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dims=[64, 128, 256, 512],
+                 num_heads=[1, 2, 4, 8], mlp_ratios=[4, 4, 4, 4], qkv_bias=False, qk_scale=None, drop_rate=0.,
+                 attn_drop_rate=0., drop_path_rate=0., norm_layer=nn.LayerNorm,
+                 depths=[3, 4, 6, 3], sr_ratios=[8, 4, 2, 1], num_stages=4,
+                 linear=False,
+                 pretrain=None
+                 ):
+        super().__init__()
+        self.pretrain = pretrain
+        self.embed_dims = embed_dims
 
+        self.num_classes = num_classes
+        self.depths = depths
+        self.num_stages = num_stages
+
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]  # stochastic depth decay rule
+        cur = 0
+
+        for i in range(num_stages):
+            patch_embed = OverlapPatchEmbed(img_size=img_size if i == 0 else img_size // (2 ** (i + 1)),
+                                            patch_size=7 if i == 0 else 3,
+                                            stride=4 if i == 0 else 2,
+                                            in_chans=in_chans if i == 0 else embed_dims[i - 1],
+                                            embed_dim=embed_dims[i])
+
+            block = nn.ModuleList([Block(
+                dim=embed_dims[i], num_heads=num_heads[i], mlp_ratio=mlp_ratios[i], qkv_bias=qkv_bias, qk_scale=qk_scale,
+                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[cur + j], norm_layer=norm_layer,
+                sr_ratio=sr_ratios[i], linear=linear)
+                for j in range(depths[i])])
+            norm = norm_layer(embed_dims[i])
+            cur += depths[i]
+
+            setattr(self, f"patch_embed{i + 1}", patch_embed)
+            setattr(self, f"block{i + 1}", block)
+            setattr(self, f"norm{i + 1}", norm)
+
+        # classification head
+#         self.head = nn.Linear(embed_dims[3], num_classes) if num_classes > 0 else nn.Identity()
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, nn.Conv2d):
+            fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+            fan_out //= m.groups
+            m.weight.data.normal_(0, math.sqrt(2.0 / fan_out))
+            if m.bias is not None:
+                m.bias.data.zero_()
+
+    def freeze_patch_emb(self):
+        self.patch_embed1.requires_grad = False
+
+    @torch.jit.ignore
+    def no_weight_decay(self):
+        return {'pos_embed1', 'pos_embed2', 'pos_embed3', 'pos_embed4', 'cls_token'}  # has pos_embed may be better
+
+    def get_classifier(self):
+        return self.head
+
+    def reset_classifier(self, num_classes, global_pool=''):
+        self.num_classes = num_classes
+        self.head = nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
+
+    #https://github.com/whai362/PVT/blob/v2/segmentation/pvt.py
+    def forward(self, x):
+        outs = []
+        B = x.shape[0]
+
+        for i in range(self.num_stages):
+            patch_embed = getattr(self, f"patch_embed{i + 1}")
+            block = getattr(self, f"block{i + 1}")
+            norm = getattr(self, f"norm{i + 1}")
+            x, H, W = patch_embed(x)
+            for blk in block:
+                x = blk(x, H, W)
+            x = norm(x)
+            #if i != self.num_stages - 1:
+            #	x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
+            x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
+            outs.append(x)
+
+        return outs
 
 class DWConv(nn.Module):
-	def __init__(self, dim=768):
-		super(DWConv, self).__init__()
-		self.dwconv = nn.Conv2d(dim, dim, 3, 1, 1, bias=True, groups=dim)
-	
-	def forward(self, x, H, W):
-		B, N, C = x.shape
-		x = x.transpose(1, 2).view(B, C, H, W)
-		x = self.dwconv(x)
-		x = x.flatten(2).transpose(1, 2)
-		
-		return x
+    def __init__(self, dim=768):
+        super(DWConv, self).__init__()
+        self.dwconv = nn.Conv2d(dim, dim, 3, 1, 1, bias=True, groups=dim)
+
+    def forward(self, x, H, W):
+        B, N, C = x.shape
+        x = x.transpose(1, 2).view(B, C, H, W)
+        x = self.dwconv(x)
+        x = x.flatten(2).transpose(1, 2)
+
+        return x
 
 
 def _conv_filter(state_dict, patch_size=16):
-	""" convert patch embedding weight from manual patchify + linear proj to conv"""
-	out_dict = {}
-	for k, v in state_dict.items():
-		if 'patch_embed.proj.weight' in k:
-			v = v.reshape((v.shape[0], 3, patch_size, patch_size))
-		out_dict[k] = v
-	
-	return out_dict
+    """ convert patch embedding weight from manual patchify + linear proj to conv"""
+    out_dict = {}
+    for k, v in state_dict.items():
+        if 'patch_embed.proj.weight' in k:
+            v = v.reshape((v.shape[0], 3, patch_size, patch_size))
+        out_dict[k] = v
 
-#
-# @register_model
-# def pvt_v2_b0(pretrained=False, **kwargs):
-# 	model = PyramidVisionTransformerV2(
-# 		patch_size=4, embed_dims=[32, 64, 160, 256], num_heads=[1, 2, 5, 8], mlp_ratios=[8, 8, 4, 4], qkv_bias=True,
-# 		norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[2, 2, 2, 2], sr_ratios=[8, 4, 2, 1],
-# 		**kwargs)
-# 	model.default_cfg = _cfg()
-#
-# 	return model
-#
-#
-# @register_model
-# def pvt_v2_b1(pretrained=False, **kwargs):
-# 	model = PyramidVisionTransformerV2(
-# 		patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[8, 8, 4, 4], qkv_bias=True,
-# 		norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[2, 2, 2, 2], sr_ratios=[8, 4, 2, 1],
-# 		**kwargs)
-# 	model.default_cfg = _cfg()
-#
-# 	return model
-#
-#
-# @register_model
-# def pvt_v2_b2(pretrained=False, **kwargs):
-# 	model = PyramidVisionTransformerV2(
-# 		patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[8, 8, 4, 4], qkv_bias=True,
-# 		norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 4, 6, 3], sr_ratios=[8, 4, 2, 1], **kwargs)
-# 	model.default_cfg = _cfg()
-#
-# 	return model
-#
-#
-# @register_model
-# def pvt_v2_b3(pretrained=False, **kwargs):
-# 	model = PyramidVisionTransformerV2(
-# 		patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[8, 8, 4, 4], qkv_bias=True,
-# 		norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 4, 18, 3], sr_ratios=[8, 4, 2, 1],
-# 		**kwargs)
-# 	model.default_cfg = _cfg()
-#
-# 	return model
-#
-#
-# @register_model
-# def pvt_v2_b4(pretrained=False, **kwargs):
-# 	model = PyramidVisionTransformerV2(
-# 		patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[8, 8, 4, 4], qkv_bias=True,
-# 		norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 8, 27, 3], sr_ratios=[8, 4, 2, 1],
-# 		**kwargs)
-# 	model.default_cfg = _cfg()
-#
-# 	return model
-#
-#
-# @register_model
-# def pvt_v2_b5(pretrained=False, **kwargs):
-# 	model = PyramidVisionTransformerV2(
-# 		patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[4, 4, 4, 4], qkv_bias=True,
-# 		norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 6, 40, 3], sr_ratios=[8, 4, 2, 1],
-# 		**kwargs)
-# 	model.default_cfg = _cfg()
-#
-# 	return model
-#
-#
-# @register_model
-# def pvt_v2_b2_li(pretrained=False, **kwargs):
-# 	model = PyramidVisionTransformerV2(
-# 		patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[8, 8, 4, 4], qkv_bias=True,
-# 		norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 4, 6, 3], sr_ratios=[8, 4, 2, 1], linear=True, **kwargs)
-# 	model.default_cfg = _cfg()
-#
-# 	return model
+    return out_dict    
+    
+class HybridEmbedN(nn.Module):
+    """ CNN Feature Map Embedding
+    Extract feature map from CNN, flatten, project to embedding dim.
+    """
+    def __init__(self, backbone, embed_dims=[32,64,128,256,512]):
+        super().__init__()
+        assert isinstance(backbone, nn.Module)
+        self.backbone = backbone
+        feature_dims = self.backbone.feature_info.channels()
+        self.num_stages = len(embed_dims)   
+
+
+        self.projs = nn.ModuleList([
+            nn.Conv2d(feature_dim, embed_dim, kernel_size=1, stride=1) for i,(feature_dim,embed_dim) in enumerate(zip(feature_dims[1:],embed_dims[1:5]))
+        ])
+            
+        self.norms = nn.ModuleList([
+            nn.LayerNorm(embed_dim) for i,embed_dim in enumerate(embed_dims[1:5])
+        ])
+ 
+        
+    def forward(self, x):
+        features = self.backbone(x)
+        
+        outs = []    
+        outs.append(features[0])
+        
+        for i,(feature, proj, norm) in enumerate(zip(features[1:],self.projs,self.norms)):
+            x = proj(feature)
+            _, _, H, W = x.shape
+            x = x.flatten(2).transpose(1, 2)
+            x = norm(x)
+            outs.append(x)
+        if self.num_stages == 6:
+            outs.append(None)
+#         x1 = self.proj1(features[1])
+#         _, _, H, W = x1.shape
+#         x1 = x1.flatten(2).transpose(1, 2)
+#         x1 = self.norm1(x1)
+#         outs.append(x1)
+        
+#         x2 = self.proj2(features[2])
+#         _, _, H, W = x2.shape
+#         x2 = x2.flatten(2).transpose(1, 2)
+#         x2 = self.norm2(x2)
+#         outs.append(x2)
+        
+#         x3 = self.proj3(features[3])
+#         _, _, H, W = x3.shape
+#         x3 = x3.flatten(2).transpose(1, 2)
+#         x3 = self.norm3(x3)
+#         outs.append(x3)
+        
+#         x4 = self.proj4(features[4])
+#         _, _, H, W = x4.shape
+#         x4 = x4.flatten(2).transpose(1, 2)
+#         x4 = self.norm4(x4)
+#         outs.append(x4)        
+        return outs   
+    
+class HybridPVTV2(nn.Module):
+    def __init__(self, embedder, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dims=[64, 128, 256, 512],
+                 num_heads=[1, 2, 4, 8], mlp_ratios=[4, 4, 4, 4], qkv_bias=False, qk_scale=None, drop_rate=0.,
+                 attn_drop_rate=0., drop_path_rate=0., norm_layer=nn.LayerNorm,
+                 depths=[3, 4, 6, 3], sr_ratios=[8, 4, 2, 1], num_stages=4,
+                 linear=False,
+                 pretrain=None
+                 ):
+        super().__init__()
+        self.pretrain = pretrain
+        self.embed_dims = embed_dims
+
+        self.num_classes = num_classes
+        self.depths = depths
+        self.num_stages = num_stages
+        
+        self.hybrid_embed = HybridEmbedN(embedder,[32]+embed_dims)
+        self.mixes = []
+        
+        for i in range(num_stages):
+            mix = nn.Parameter(torch.tensor(0.8))
+            self.mixes.append(mix)
+
+        
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]  # stochastic depth decay rule
+        cur = 0
+
+        for i in range(num_stages):
+            patch_embed = OverlapPatchEmbed(img_size=img_size if i == 0 else img_size // (2 ** (i + 1)),
+                                            patch_size=7 if i == 0 else 3,
+                                            stride=4 if i == 0 else 2,
+                                            in_chans=in_chans if i == 0 else embed_dims[i - 1],
+                                            embed_dim=embed_dims[i])
+
+            block = nn.ModuleList([Block(
+                dim=embed_dims[i], num_heads=num_heads[i], mlp_ratio=mlp_ratios[i], qkv_bias=qkv_bias, qk_scale=qk_scale,
+                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[cur + j], norm_layer=norm_layer,
+                sr_ratio=sr_ratios[i], linear=linear)
+                for j in range(depths[i])])
+            norm = norm_layer(embed_dims[i])
+            cur += depths[i]
+
+            setattr(self, f"patch_embed{i + 1}", patch_embed)
+            setattr(self, f"block{i + 1}", block)
+            setattr(self, f"norm{i + 1}", norm)
+
+        # classification head
+#         self.head = nn.Linear(embed_dims[3], num_classes) if num_classes > 0 else nn.Identity()
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, nn.Conv2d):
+            fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+            fan_out //= m.groups
+            m.weight.data.normal_(0, math.sqrt(2.0 / fan_out))
+            if m.bias is not None:
+                m.bias.data.zero_()
+
+    def freeze_patch_emb(self):
+        self.patch_embed1.requires_grad = False
+
+    @torch.jit.ignore
+    def no_weight_decay(self):
+        return {'pos_embed1', 'pos_embed2', 'pos_embed3', 'pos_embed4', 'cls_token'}  # has pos_embed may be better
+
+    def get_classifier(self):
+        return self.head
+
+    def reset_classifier(self, num_classes, global_pool=''):
+        self.num_classes = num_classes
+        self.head = nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
+
+    #https://github.com/whai362/PVT/blob/v2/segmentation/pvt.py
+    def forward(self, x):
+        outs = []
+        B = x.shape[0]
+
+        # stage hybrid
+        ## cnn embedders
+        embedders = self.hybrid_embed(x)
+        outs.append(embedders[0])
+        
+        for i, embed, mix in zip(range(self.num_stages),embedders[1:], self.mixes):
+            patch_embed = getattr(self, f"patch_embed{i + 1}")
+            block = getattr(self, f"block{i + 1}")
+            norm = getattr(self, f"norm{i + 1}")
+            x, H, W = patch_embed(x)
+            if embed is not None:
+                x = mix*x + (1-mix)*embed
+            for blk in block:
+                x = blk(x, H, W)
+            x = norm(x)
+#             if embed is not None:
+#                 x = mix*x + (1-mix)*embed
+            #if i != self.num_stages - 1:
+            #	x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
+            x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
+            outs.append(x)
+
+        return outs
+
+
+
+class pvt_v2_b2 (PyramidVisionTransformerV2):
+    def __init__(self, **kwargs):
+        super(pvt_v2_b2, self).__init__(
+            patch_size=4,
+            embed_dims=[64, 128, 320, 512],
+            num_heads=[1, 2, 5, 8],
+            mlp_ratios=[8, 8, 4, 4],
+            qkv_bias=True,
+            norm_layer=partial(nn.LayerNorm, eps=1e-6),
+            depths=[3, 4, 6, 3], 
+            sr_ratios=[8, 4, 2, 1],
+            pretrain ='pvt_v2_b2.pth',
+            **kwargs)
+        
+class pvt_v2_b2_5level(PyramidVisionTransformerV2):
+    def __init__(self, **kwargs):
+        super(pvt_v2_b2_5level, self).__init__(
+            patch_size=4,
+            embed_dims=[64, 128, 320, 512, 512],
+            num_heads=[1, 2, 5, 8, 8],
+            mlp_ratios=[8, 8, 4, 4, 4],
+            qkv_bias=True,
+            norm_layer=partial(nn.LayerNorm, eps=1e-6),
+            depths=[3, 4, 6, 3, 3], 
+            sr_ratios=[8, 4, 2, 1, 1],
+            num_stages = 5,
+            pretrain ='pvt_v2_b2.pth',
+            **kwargs)
+
 
 
 #@register_model
 class pvt_v2_b4 (PyramidVisionTransformerV2):
-	def __init__(self, **kwargs):
-		super(pvt_v2_b4, self).__init__(
-			patch_size=4,
-			embed_dims=[64, 128, 320, 512],
-			num_heads=[1, 2, 5, 8],
-			mlp_ratios=[8, 8, 4, 4],
-			qkv_bias=True,
-			norm_layer=partial(nn.LayerNorm, eps=1e-6),
-			depths=[3, 8, 27, 3], sr_ratios=[8, 4, 2, 1],
-			pretrain ='pvt_v2_b4.pth',
-			**kwargs)
+    def __init__(self, **kwargs):
+        super(pvt_v2_b4, self).__init__(
+            patch_size=4,
+            embed_dims=[64, 128, 320, 512],
+            num_heads=[1, 2, 5, 8],
+            mlp_ratios=[8, 8, 4, 4],
+            qkv_bias=True,
+            norm_layer=partial(nn.LayerNorm, eps=1e-6),
+            depths=[3, 8, 27, 3], 
+            sr_ratios=[8, 4, 2, 1],
+            pretrain ='pvt_v2_b4.pth',
+            **kwargs)
 
+        
+class pvt_v2_b4_5level(PyramidVisionTransformerV2):
+    def __init__(self, **kwargs):
+        super(pvt_v2_b4_5level, self).__init__(
+            patch_size=4,
+            embed_dims=[64, 128, 320, 512, 768],
+            num_heads=[1, 2, 5, 8, 8],
+            mlp_ratios=[8, 8, 4, 4, 4],
+            qkv_bias=True,
+            norm_layer=partial(nn.LayerNorm, eps=1e-6),
+            depths=[3, 8, 27, 3, 3], 
+            sr_ratios=[8, 4, 2, 1, 1],
+            num_stages = 5,
+            pretrain ='pvt_v2_b4.pth',
+            **kwargs)        
 
 if 0:
 	net = pvt_v2_b4(img_size=800)

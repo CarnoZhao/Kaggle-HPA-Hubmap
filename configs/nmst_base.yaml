@@ -1,34 +1,14 @@
 global:
-  name: &name raw_pv2d_ms
-  fold: &fold 3
-  version: &version f3
+  name: &name nmst_b4_v3
+  fold: &fold 4
+  version: &version f4
 
-norm_cfg: &norm_cfg {type: BN, requires_grad: True}
 model:
-  type: MMSegModel
-  load_from: ./logs/raw_pvt2daf/f3/epoch*.ckpt
-  backbone:
-    type: mmseg.PyramidVisionTransformerV2MS
-    model_name: b2
-    pretrained: ./weights/pvt_v2_b2.pth
-    policy_path: ./configs/_base_/ms_policy.txt
-  decode_head:
-    type: DAFormerHead
-    channels: 256
-    dropout_ratio: 0.1
-    num_classes: 1
-    norm_cfg: *norm_cfg
-    align_corners: False
-    decoder_params:
-      embed_dims: 256
-      embed_cfg: {type: mlp, act_cfg: null, norm_cfg: null}
-      embed_neck_cfg: {type: mlp, act_cfg: null, norm_cfg: null}
-      fusion_cfg: 
-        type: conv
-        kernel_size: 3
-        act_cfg: {type: ReLU}
-        norm_cfg: *norm_cfg
-
+  type: SMPModel
+  model_type: Unet
+  model_name: timm-efficientnet-b4
+  pretrained_weight: noisy-student
+  num_classes: 1
 
 loss: [
   {type: BCEWithIgnoreLoss, loss_name: bce_loss, ignore_index: 255, loss_weight: 1.0},
@@ -43,12 +23,12 @@ data:
   type: RawData
   fold: *fold
   num_folds: 5
-  batch_size: 12
+  batch_size: 16
   stratified_by: null
   group_by: null
   dataset:
-    image_size: &image_size 1024
-    resize: &resize 1024
+    image_size: &image_size 768
+    resize: &resize 768
     trans: {
       train: [
         {type: Resize, height: *resize, width: *resize},
@@ -66,11 +46,13 @@ data:
           {type: ColorJitter, p: 0.5, contrast: 0.4, saturation: 0.0, hue: 0.0, brightness: 0.0},
           {type: GaussNoise, p: 0.5},
         ], p: 1.0, n: 2, replace: False},
+        {type: StainNormAug, aug: 0.9, p: 0.5},
         {type: Normalize},
         {type: ToTensorV2},
       ],
       val: [
         {type: Resize, height: *resize, width: *resize},
+        {type: StainNormAug, always_apply: True, aug: 0.0},
         {type: Normalize},
         {type: ToTensorV2},
       ]
@@ -79,18 +61,18 @@ data:
 train:
   # optimizer
   optimizer: adam
-  learning_rate: 1e-4
+  learning_rate: 1e-3
   weight_decay: 2e-5
 
   # scheduler
-  num_epochs: 20
-  scheduler: cos_iterwise
+  num_epochs: 100
+  scheduler: one_cycle
 
   # trainer
   monitor: val_dice
   log_step: 50
-  val_interval: 1
-  swa: False
+  val_interval: 5
+  swa: True
   grad_clip: 2.0
   strategy: dp
 

@@ -26,7 +26,12 @@ try:
     from staintools.miscellaneous.get_concentrations import get_concentrations
 
     class StainNormAug(ImageOnlyTransform):
-        def __init__(self, method = 'vahadane', sigma1 = 0.2, sigma2 = 0.2, aug = 0.5, always_apply = False, p = 0.5):
+        def __init__(self, 
+                stain_matrix_path = "./data/he_unlabeled/stain_matrix.npy",
+                maxC_path = "./data/he_unlabeled/maxC.npy",
+                method = 'vahadane', 
+                sigma1 = 0.2, sigma2 = 0.2, 
+                aug = 0.5, always_apply = False, p = 0.5):
             super(StainNormAug, self).__init__(always_apply=always_apply, p=p)
             if method.lower() == 'macenko':
                 self.extractor = MacenkoStainExtractor
@@ -37,19 +42,18 @@ try:
             self.sigma1 = sigma1
             self.sigma2 = sigma2
             self.aug = aug
+            self.stain_matrix = np.load(stain_matrix_path)
+            self.maxC = np.load(maxC_path)
 
-        @property
-        def maxC_target(self):
-            return np.array([[2.80235547, 1.64160326]])
+        def get_maxC(self):
+            return self.maxC[np.random.randint(len(self.maxC))]
 
-        @property
-        def matrix_target(self):
-            return np.array([[0.51196973, 0.76052588, 0.39456241],
-                            [0.18823047, 0.84396271, 0.46774341]])
+        def get_stain_matrix(self):
+            return self.stain_matrix[np.random.randint(len(self.stain_matrix))]
             
         def apply(self, img, **params):
-            maxC_target = self.maxC_target
-            stain_matrix_target = self.matrix_target
+            maxC_target = self.get_maxC()
+            stain_matrix_target = self.get_stain_matrix()
             I = img
             # standardize
             I_LAB = cv2.cvtColor(I, cv2.COLOR_RGB2LAB)

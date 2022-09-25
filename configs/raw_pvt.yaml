@@ -1,5 +1,5 @@
 global:
-  name: &name raw_pv2d_stain
+  name: &name nmst_pv2d_v3
   fold: &fold 4
   version: &version f4
 
@@ -68,13 +68,14 @@ data:
           {type: ColorJitter, p: 0.5, contrast: 0.0, saturation: 0.4, hue: 0.4, brightness: 0.0},
           {type: ColorJitter, p: 0.5, contrast: 0.4, saturation: 0.0, hue: 0.0, brightness: 0.0},
           {type: GaussNoise, p: 0.5},
-          {type: StainTools, p: 0.5}
         ], p: 1.0, n: 2, replace: False},
+        {type: StainNormAug, aug: 0.9, p: 0.5},
         {type: Normalize},
         {type: ToTensorV2},
       ],
       val: [
         {type: Resize, height: *resize, width: *resize},
+        {type: StainNormAug, always_apply: True, aug: 0.0},
         {type: Normalize},
         {type: ToTensorV2},
       ]
